@@ -1,0 +1,20 @@
+{
+    "columns": {
+        "sku": ["SUPPLIER_PART_NUMBER", "MANUFACTURER SKU", "Vendor Part Number"], 
+        "price": ["RESELLER_BUY_EX", "DBP", "Retail Price"], 
+        "availability": ["TOTAL_AVAILABILITY", "AT", "Available Quantity"],
+        "upc"         : ["UPC", "EANUPC Code","STOCK CODE"]
+    },
+    "replace" : {
+        "availability":{
+            "B":"0",
+            "CALL":">1"
+        }
+    },
+    "sku_chars_to_remove" : " -_=/.",
+    "sku_ignore_case" : false,
+    "output_filename" : null,
+    "duplicates_filename" : null,
+    "all_skus_filename" : null,
+    "inlude_0_priced_items" : false
+}
