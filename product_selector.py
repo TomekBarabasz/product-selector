@@ -40,8 +40,8 @@ def readConfig(Args):
 
 def prepareInputs(Args):
     Cfg = readConfig(Args)
-    if Args.out is not None:
-        Cfg[fOutputFilename]=Args.out
+    if Args.output is not None:
+        Cfg[fOutputFilename]=Args.output
     if fOutputFilename not in Cfg or Cfg[fOutputFilename] is None:
         Cfg[fOutputFilename]='results.csv'
     if 'sku_chars_to_remove' not in Cfg or Cfg['sku_chars_to_remove'] is None:
@@ -276,11 +276,10 @@ def main(Args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("dir",type=Path,help="directory containing input (datafeed) files")
-    parser.add_argument("-out",type=Path,help="output file path and name")
+    parser.add_argument("-output","-o", type=Path,help="output file path and name")
     parser.add_argument("-duplicates","-d",type=Path,help="duplicates file path and name")
     parser.add_argument("-names","-n",type=Path,help="all names file path and name")
     parser.add_argument("-cfg",type=Path,help="config file path and name")
-    parser.add_argument("-skumatch",type=str,choices=['exact','weak'], help="config file path and name")
     parser.add_argument("-verbose","-v",action='store_true',help="print debug informations")
     Args = parser.parse_args()
     main(Args)

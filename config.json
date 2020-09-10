@@ -13,8 +13,9 @@
     },
     "sku_chars_to_remove" : " -_=/.",
     "sku_ignore_case" : false,
+    "inlude_0_priced_items" : false,
+    
     "output_filename" : null,
     "duplicates_filename" : null,
-    "all_skus_filename" : null,
-    "inlude_0_priced_items" : false
+    "all_skus_filename" : null
 }
