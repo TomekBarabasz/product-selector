@@ -12,7 +12,7 @@
         }
     },
     "sku_chars_to_remove" : " -_=/.",
-    "sku_ignore_case" : false,
+    "sku_ignore_case" : true,
     "inlude_0_priced_items" : false,
     
     "output_filename" : null,
