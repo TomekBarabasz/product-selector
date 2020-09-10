@@ -6,16 +6,16 @@ fOutputFilename = 'output_filename'
 fDuplicatesFilename = 'duplicates_filename'
 fAllNamesFilename = 'all_skus_filename'
 
-def readConfig(Args):
+def readConfig(Args, verbose):
     dump=False
     if Args.cfg is not None:
         try:
             with Args.cfg.open() as jsonFile:
                 cfg = json.load(jsonFile)
-            print('config file loaded succesfully')
+            verbose('config file loaded succesfully')
             return cfg
         except json.decoder.JSONDecodeError:
-            print('config file corrupted, reverting to defaults')
+            verbose('config file corrupted, reverting to defaults')
             dump=True
     
     #default configuration
@@ -38,8 +38,8 @@ def readConfig(Args):
             json.dump(cfg, outfile)
     return cfg
 
-def prepareInputs(Args):
-    Cfg = readConfig(Args)
+def prepareInputs(Args,verbose):
+    Cfg = readConfig(Args,verbose)
     if Args.output is not None:
         Cfg[fOutputFilename]=Args.output
     if fOutputFilename not in Cfg or Cfg[fOutputFilename] is None:
@@ -56,6 +56,8 @@ def prepareInputs(Args):
         Cfg['replace'] = {}
     if "sku_ignore_case" not in Cfg or Cfg["sku_ignore_case"] is None:
         Cfg["sku_ignore_case"] = True
+    if 'encodings' not in Cfg or Cfg['encodings'] is None:
+        Cfg['encodings'] = (None, "utf-8", "cp1252", "ISO-8859-1")
     return Cfg
 
 def getColumnIdx(sline,Titles):
@@ -115,21 +117,25 @@ def availabilityToRange(avail):
             return (1,int(avail[1:]))
         raise
 
-def loadItems(filename, columns, replacement, include0PricedItems, translateSku, verbose):
+def covertToType(string,type):
+    try:
+        return type(string)
+    except ValueError:
+        return None
+
+def _loadItems(filename, columns, replacement, include0PricedItems, translateSku, encoding, verbose):
     Item = namedtuple('Item', ['filename','sku', 'price','availability','orig_availability','optionalColumns'])
     Items = {}
 
     priceReplacement = replacement['price'] if 'price' in replacement else {}
     availreplacement = replacement['availability'] if 'availability' in replacement else {}
 
-    if verbose: print('loading file : ',filename)
     firstLine=True
-    with open(filename) as csvfile:
+    with open(filename, encoding=encoding) as csvfile:
         line = csvfile.readline()
         sep=detectSeparator(line)
-        if verbose: 
-            sepn = {'\t':'tab', ',':'comma'}[sep]
-            print( f"file {filename} using { sepn } separator" )
+        invalidLines = 0
+        invalidPrices = 0
         csvfile.seek(0)
         reader = csv.reader(csvfile, delimiter=sep)
         for row in reader:
@@ -138,41 +144,52 @@ def loadItems(filename, columns, replacement, include0PricedItems, translateSku,
                 priceIdx = getColumnIdx(row,columns['price'])
                 availabilityIdx = getColumnIdx(row,columns['availability'])
                 if skuIdx is None or priceIdx is None or availabilityIdx is None:
-                    print(f'error loading titles : skuIdx {skuIdx}, priceIdx {priceIdx} availabilityIdx {availabilityIdx}')
-                    print(row)
+                    verbose(f'error loading titles : skuIdx {skuIdx}, priceIdx {priceIdx} availabilityIdx {availabilityIdx}')
+                    verbose(row)
                     return None
                 optionalColumns = {k : getColumnIdx(row,v) for k,v in columns.items() if k not in ('sku','price','availability')}
-                if verbose: print(f'loading titles : skuIdx {skuIdx}, priceIdx {priceIdx} availabilityIdx {availabilityIdx}')
-                if verbose: print(f'loading titles : sku {row[skuIdx]}, price {row[priceIdx]} availability {row[availabilityIdx]}')
-                lineNo=2
+                skuTitle = row[skuIdx]
+                priceTitle = row[priceIdx]
+                availabilityTitle = row[availabilityIdx]
                 firstLine = False
             else:
                 try:
                     opt = { k:getAt(row, v) for k,v in optionalColumns.items() }
-                    #availability = convertAvailability( row, availabilityIdx, availreplacement )
                     availability = getAt(row, availabilityIdx, availreplacement)
                     avr = availabilityToRange(availability)
                     if avr[1] <=0 : continue
                     sku = getAt(row, skuIdx)
-                    try:
-                        price = float(getAt(row, priceIdx,priceReplacement))
-                        invalidPrice = price==0 and not include0PricedItems
-                        if not invalidPrice:
-                            skut = translateSku(sku)
-                            item = Item(filename.name, sku, price, availability, row[availabilityIdx], opt)
-                            Items[skut] = item
-                    except ValueError:
-                        invalidPrice=True
-                    if verbose: print(f'skippint item {sku} with invalid price {row[priceIdx]}')
+                    price = covertToType(getAt(row, priceIdx,priceReplacement), float)
+                    if price is None:
+                        invalidPrices += 1
+                    elif price==0 and not include0PricedItems:
+                        invalidPrices += 1
+                    else:
+                        skut = translateSku(sku)
+                        item = Item(filename.name, sku, price, availability, row[availabilityIdx], opt)
+                        Items[skut] = item
                 except IndexError:
-                    pass
-                except ValueError:
-                    print(f'ValueError at {lineNo} sku {sku} 1st column {row[0]}')
-                    print(row)
-                    raise
-                lineNo+=1
-    print( f'Loaded {len(Items)} items from file {filename}')
+                    invalidLines += 1
+    
+    sepn = 'comma' if sep==',' else 'tab'
+    verbose(f'file {filename} separator "{sepn}" encoding {encoding}')
+    verbose(f'\tloaded {len(Items)} items')
+    verbose(f'\tskipped {invalidPrices} items without a price')
+    verbose(f'\tskipped {invalidLines} invalid lines')
+    verbose(f'\ttitle indices: skuIdx "{skuIdx}", priceIdx "{priceIdx}" availabilityIdx "{availabilityIdx}"')
+    verbose(f'\ttitle names: sku "{skuTitle}", price "{priceTitle}" availability "{availabilityTitle}"')
     return Items
+
+def loadItems(filename, columns, replacement, include0PricedItems, translateSku, encodings, verbose):
+    for enc in encodings:
+        try:
+            itms = _loadItems(filename, columns, replacement, include0PricedItems, translateSku, enc, verbose)
+            if itms is not None:
+                return itms
+        except:
+            pass
+    verbose(f'DecodeError when reading file {filename} - skipping')
+    return None
 
 def printItems(Items):
     for filename,items in Items.items():
@@ -207,11 +224,12 @@ def compareAvailability(a, b):
     elif rb[1] < ra[1]: return 1
     else: return 0
 
-def selectItems(Items):
+def selectItems(Items, verbose):
     SelectedItems = {}
     Duplicates = []
+    verbose('adding items')
+    itemsCnt = 0
     for f,items in Items.items():
-        print('adding items from file',f)
         dupCnt=0
         for name,item in items.items():
             selName,selItem = findMatching(SelectedItems, name)
@@ -222,11 +240,28 @@ def selectItems(Items):
                     SelectedItems[name] = item   
             else:
                 SelectedItems[name]=item
-        print(f'found {dupCnt} duplicates, total selected items {len(SelectedItems)}')
+        totItems = len(SelectedItems)
+        verbose(f'\tfile {f } : {dupCnt} duplicates, added {totItems-itemsCnt} items, total items {totItems}')
+        itemsCnt = totItems
     return SelectedItems, Duplicates
 
+def makeVerbose(Args):
+    def dummy(txt):pass
+    def toConsole(txt):
+        print(txt)
+    def toFile(txt):
+        summaryFile.write(txt+'\n')
+    if Args.verbose:
+        return toConsole
+    elif Args.summary:
+        summaryFile = open(Args.summary,'w')
+        return toFile
+    else:
+        return dummy
+
 def main(Args):
-    Cfg = prepareInputs(Args)
+    verbose = makeVerbose(Args)
+    Cfg = prepareInputs(Args,verbose)
     Files = [x for x in Args.dir.iterdir() if x.is_file() and x.suffix.lower() in ('.csv','.txt')]
 
     columns = Cfg['columns']
@@ -236,6 +271,7 @@ def main(Args):
     allnamesFn = Cfg[fAllNamesFilename]
     zpi = Cfg["inlude_0_priced_items"]
     ignoreSkuCase = Cfg["sku_ignore_case"]
+    encodings = Cfg['encodings']
 
     tt = str.maketrans( {c:None for c in Cfg['sku_chars_to_remove']} )
     def translateSku(sku):
@@ -244,8 +280,13 @@ def main(Args):
             skut = skut.lower()
         return skut
     
-    Items = { f:loadItems(f, columns, replacement, zpi, translateSku, Args.verbose) for f in Files }
-    SelectedItems,Duplicates = selectItems(Items)
+    Items = {}
+    for f in Files:
+        itms = loadItems(f, columns, replacement, zpi, translateSku, encodings, verbose)
+        if itms is not None:
+            Items[f]=itms
+    
+    SelectedItems,Duplicates = selectItems(Items, verbose)
     
     with open(outputFn,'w') as outf:
         row = 'sku,filename,price,availability'
@@ -279,6 +320,7 @@ if __name__ == '__main__':
     parser.add_argument("-output","-o", type=Path,help="output file path and name")
     parser.add_argument("-duplicates","-d",type=Path,help="duplicates file path and name")
     parser.add_argument("-names","-n",type=Path,help="all names file path and name")
+    parser.add_argument("-summary","-s",type=Path,help="summary file path and name")
     parser.add_argument("-cfg",type=Path,help="config file path and name")
     parser.add_argument("-verbose","-v",action='store_true',help="print debug informations")
     Args = parser.parse_args()
