@@ -3,6 +3,7 @@
         "sku": ["SUPPLIER_PART_NUMBER", "MANUFACTURER SKU", "Vendor Part Number"], 
         "price": ["RESELLER_BUY_EX", "DBP", "Retail Price"], 
         "availability": ["TOTAL_AVAILABILITY", "AT", "Available Quantity"],
+        "weight"      : ["weight"],
         "upc"         : ["UPC", "EANUPC Code","BAR CODE"]
     },
     "replace" : {
@@ -10,6 +11,35 @@
             "B":"0",
             "CALL":"0",
             "3-":"0"
+        },
+        "weight":{
+            "B":null,
+            "NO":null
+        }
+    },
+    "suppliers" : {
+        "Leader" : "LNR4520200908151408.csv",
+        "Synnex" : "LNRGAMING_synnex_au.txt",
+        "Ingram" : "294280.txt"
+    },
+    "shipping_rules" : {
+        "Leader" : {
+            "0-3kg" : 12,
+            "3-5kg" : 17.5,
+            ">5kg"  : 25,
+            "NA"    : 15,
+            "free"  : ">1000$"
+        },
+        "Synnex" : {
+            "per_product" : 15,
+            "free" : ">300$",
+            "NA" : 15
+        },
+        "Ingram" : {
+            "0-5kg" : 15,
+            ">5kg" : 35,
+            "free" : ">300$",
+            "NA" : 15
         }
     },
     "encodings" : [null, "utf-8", "cp1252", "ISO-8859-1"],

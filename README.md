@@ -25,6 +25,18 @@ Additional columns, like `upc` can be specified the same way, these will be adde
 In this section, for each extracted column, like `availability` value replacement rules can be specified (optionally)  
 This shall address a problem with `availability` equal to `B` or `CALL` - it can be replaced with `0` or `>1`  
 
+### suppliers section
+This section defines mapping of datafeed filename to supplier name. Supplier name is required for matchig appropriate shipping cost rules
+to datafeed files
+
+### shipping_rules section
+   Available rules:
+      "NA" : cost    - cost to be applied when no weight is provided (weight column empty)  
+      "x-ykg" : cost - cost to be applied when weight is between x and y kg  
+      ">ykg"  : cost - cost to be applied when weight is more than y kg  
+      "per_produce" : cost - cost to be applied per product, independent from weight
+      "free" : ">x$" - free shipping above x price 
+
 ### filenames section
 `output_filename` - result file  
 `duplicates_filename` - file with found dulicated 'sku''s listed per row, for verification purposes [optional]  
