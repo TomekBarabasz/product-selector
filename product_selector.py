@@ -1,4 +1,4 @@
-import sys,argparse,json,re,csv,unittest
+import sys,argparse,json,re,csv,unittest,operator
 from pathlib import Path
 from collections import namedtuple
 
@@ -6,8 +6,10 @@ fOutputFilename = 'output_filename'
 fDuplicatesFilename = 'duplicates_filename'
 fAllNamesFilename = 'all_skus_filename'
 
+class Supplier:
+    pass
+
 def readConfig(Args, verbose):
-    dump=False
     if Args.cfg is not None:
         try:
             with Args.cfg.open() as jsonFile:
@@ -16,27 +18,7 @@ def readConfig(Args, verbose):
             return cfg
         except json.decoder.JSONDecodeError:
             verbose('config file corrupted, reverting to defaults')
-            dump=True
-    
-    #default configuration
-    cfg = { 'columns' : 
-            {
-                'sku'   : ('SUPPLIER_PART_NUMBER','MANUFACTURER SKU', 'Vendor Part Number'),
-                'price' : ('RESELLER_BUY_EX','DBP','Retail Price'),
-                'availability' : ('TOTAL_AVAILABILITY','AT','Available Quantity'),
-                "upc"         : ("UPC", "EANUPC Code","STOCK CODE")
-            },
-            'replace' : { 'availability' : {'B':0, 'CALL':0}},
-            'sku_chars_to_remove' : ' -_=/.',
-            fOutputFilename : Args.output,
-            fDuplicatesFilename : None,
-            fAllNamesFilename : None,
-            'inlude_0_priced_items' : False
-        }
-    if dump:
-        with open('default_config.json', 'w') as outfile:
-            json.dump(cfg, outfile)
-    return cfg
+    return None
 
 def makeShippingCostRule(Rules,parseRange):
     def calcShippingCost(price,weight):
@@ -72,6 +54,7 @@ def makeShippingCostRule(Rules,parseRange):
     return calcShippingCost
 
 def loadShippingCostRules(ShippingRules):
+    if ShippingRules is None:   return lambda x: 0
     def parseRange(string):
         m = x1.match(string)
         if m is not None:
@@ -84,8 +67,16 @@ def loadShippingCostRules(ShippingRules):
         return None,None
     x1 = re.compile('(\d+.*\d*)-(\d+.*\d*)kg')
     x2 = re.compile('>(\d+.*\d*)(kg|\$)')
-    Rules = {supplier : makeShippingCostRule(rules,parseRange) for supplier,rules in ShippingRules.items()}
-    return Rules
+    return makeShippingCostRule(ShippingRules, parseRange)
+
+def makeTranslateSku(charsToRemove,ignoreCase):
+    tt = str.maketrans( {c:None for c in charsToRemove} )
+    def translateSku(sku):
+        skut = sku.translate(tt)
+        if ignoreCase:
+            skut = skut.lower()
+        return skut
+    return translateSku
 
 def prepareInputs(Args,verbose):
     Cfg = readConfig(Args,verbose)
@@ -94,7 +85,7 @@ def prepareInputs(Args,verbose):
     if fOutputFilename not in Cfg or Cfg[fOutputFilename] is None:
         Cfg[fOutputFilename]='results.csv'
     if 'sku_chars_to_remove' not in Cfg or Cfg['sku_chars_to_remove'] is None:
-        Cfg['sku_chars_to_remove']={}
+        Cfg['sku_chars_to_remove']=""
     if Args.duplicates is not None:
         Cfg[fDuplicatesFilename] = Args.duplicates 
     if Args.names is not None:
@@ -107,16 +98,33 @@ def prepareInputs(Args,verbose):
         Cfg["sku_ignore_case"] = True
     if 'encodings' not in Cfg or Cfg['encodings'] is None:
         Cfg['encodings'] = (None, "utf-8", "cp1252", "ISO-8859-1")
-    Cfg['shipping'] = loadShippingCostRules(Cfg['shipping_rules']) if 'shipping_rules' in Cfg else {}
-    return Cfg
+    
+    global_settings = ['inlude_0_priced_items', 'replace', 'sku_chars_to_remove','sku_ignore_case']
+    Suppliers = {}
+    for name,supp_def in Cfg['suppliers'].items():
+        supp = Supplier()
+        for gsn in global_settings:
+            val = Cfg[gsn] if gsn not in supp_def else supp_def[gsn]
+            setattr(supp,gsn,val)
+        supp.name = name
+        supp.shipping = loadShippingCostRules(supp_def['shipping_rules'] if 'shipping_rules' in supp_def else None)
+        supp.translateSku = makeTranslateSku(supp.sku_chars_to_remove, supp.sku_ignore_case)
+        supp.data = Args.dir / supp_def['data']
+        supp.columns = supp_def['columns']
+        Suppliers[name]=supp
+    
+    return Cfg,Suppliers
 
-def getColumnIdx(sline,Titles):
-    for title in Titles:
+def getColumnIdx(sline,title):
+    try:
         title = title.lower()
-        for i in range(len(sline)):
-            if sline[i].lower() == title:
-                return i
-    return None
+        sline = [s.lower() for s in sline]
+        return sline.index(title)
+    except ValueError:
+        return None
+
+def getColumnIndices(sline,title):
+    return [ sline.index(c) for c in title.split('+') ]
 
 def createSplitter(line):
     def splitByTabs(line):
@@ -164,7 +172,7 @@ def availabilityToRange(avail):
             return (int(avail[1:]), sys.maxsize)
         elif avail[0]=='<':
             return (1,int(avail[1:]))
-        raise
+        return (0,0)
 
 def covertToType(string,type):
     try:
@@ -172,14 +180,46 @@ def covertToType(string,type):
     except ValueError:
         return None
 
-def _loadItems(filename, supplier, columns, replacement, include0PricedItems, translateSku, encoding, shippingCostFcn, verbose):
+def combineRange(availability_range,r):
+    a0 = availability_range[0]
+    a1 = availability_range[1]
+    if r[0] != 0:
+        a0 = min(availability_range[0], r[0])
+    a1 = min( sys.maxsize, availability_range[1] + r[1])
+    return (a0,a1)
+
+def readAvailability(row, availabilityIdx, availreplacement):
+    availability_str = ""
+    availability_value=0
+    availability_range = (0,0)
+    is_value_ok = True
+    for i in availabilityIdx:
+        a = getAt(row, i, availreplacement)
+        r = availabilityToRange(a)
+        availability_range = combineRange(availability_range,r)
+        if availability_str:
+            availability_str += "+"
+        availability_str += a
+        try:
+            availability_value += int(a)
+        except ValueError:
+            is_value_ok = False
+            pass
+    return availability_value if is_value_ok else availability_str ,availability_range
+
+def _loadItems(supplier_def, encoding, verbose):
     Item = namedtuple('Item', ['supplier','sku', 'price','tot_cost','availability','orig_availability','optionalColumns'])
-    Items = {}
+
+    shippingCostFcn = supplier_def.shipping
+    replacement = supplier_def.replace
     priceReplacement = replacement['price'] if 'price' in replacement else {}
     availreplacement = replacement['availability'] if 'availability' in replacement else {}
     weightReplacement = replacement['weight'] if 'weight' in replacement else {}
+    columns = supplier_def.columns
     firstLine=True
-    with open(filename, encoding=encoding) as csvfile:
+    Items = {}
+
+    with open(supplier_def.data, encoding=encoding) as csvfile:
         line = csvfile.readline()
         sep=detectSeparator(line)
         invalidLines = 0
@@ -189,37 +229,39 @@ def _loadItems(filename, supplier, columns, replacement, include0PricedItems, tr
         for row in reader:
             if firstLine:
                 skuIdx = getColumnIdx(row,columns['sku'])
+                if skuIdx is None:    
+                    cn = columns['sku']
+                    verbose(f'error loading sku title {cn}')
                 priceIdx = getColumnIdx(row,columns['price'])
-                availabilityIdx = getColumnIdx(row,columns['availability'])
+                if priceIdx is None:  verbose('error loading price title')
+                availabilityIdx = getColumnIndices(row,columns['availability'])
+                if availabilityIdx is None: verbose('error loading availability title')
                 weightIdx = getColumnIdx(row,columns['weight'])
-                if skuIdx is None or priceIdx is None or availabilityIdx is None:
-                    verbose(f'error loading titles : skuIdx {skuIdx}, priceIdx {priceIdx} availabilityIdx {availabilityIdx} weightIdx {weightIdx}')
-                    verbose(row)
+                if weightIdx is None: verbose('error loading weight title')
+                if skuIdx is None or priceIdx is None or availabilityIdx is None or weightIdx is None:
+                    verbose(','.join(row))
                     return None
                 optionalColumns = {k : getColumnIdx(row,v) for k,v in columns.items() if k not in ('sku','price','availability','weight')}
-                skuTitle = row[skuIdx]
-                priceTitle = row[priceIdx]
-                availabilityTitle = row[availabilityIdx]
-                weightTitle = row[weightIdx] if weightIdx is not None else ''
                 firstLine = False
             else:
                 try:
                     opt = { k:getAt(row, v) for k,v in optionalColumns.items() }
-                    availability = getAt(row, availabilityIdx, availreplacement)
-                    avr = availabilityToRange(availability)
-                    if avr[1] <=0 : continue
+                    availability,avr = readAvailability(row, availabilityIdx, availreplacement)
+                    if avr[1] <=0 : 
+                        #print(f"{supplier_def.name} skipping item {sku} with avr {avr}")
+                        continue
                     sku = getAt(row, skuIdx)
                     price = covertToType(getAt(row, priceIdx, priceReplacement), float)
 
                     weight = covertToType(getAt(row, weightIdx, weightReplacement), float) if weightIdx is not None else 0
                     if price is None:
                         invalidPrices += 1
-                    elif price==0 and not include0PricedItems:
+                    elif price==0 and not supplier_def.inlude_0_priced_items:
                         invalidPrices += 1
                     else:
-                        skut = translateSku(sku)
+                        skut = supplier_def.translateSku(sku)
                         shc = shippingCostFcn(price,weight) if shippingCostFcn is not None else 0
-                        item = Item(supplier, sku, price, price+shc, availability, row[availabilityIdx], opt)
+                        item = Item(supplier_def.name, sku, price, price+shc, avr, availability, opt)
                         Items[skut] = item
                 except IndexError:
                     invalidLines += 1
@@ -227,23 +269,22 @@ def _loadItems(filename, supplier, columns, replacement, include0PricedItems, tr
                     print('ValueError ', row)
     
     sepn = 'comma' if sep==',' else 'tab'
-    verbose(f'file {filename} separator "{sepn}" encoding {encoding}')
+    verbose(f'file {supplier_def.data} separator "{sepn}" encoding {encoding}')
     verbose(f'\tloaded {len(Items)} items')
     verbose(f'\tskipped {invalidPrices} items without a price')
     verbose(f'\tskipped {invalidLines} invalid lines')
     verbose(f'\ttitle indices: skuIdx "{skuIdx}", priceIdx "{priceIdx}" availabilityIdx "{availabilityIdx}" weightIdx "{weightIdx}"')
-    verbose(f'\ttitle names: sku "{skuTitle}", price "{priceTitle}" availability "{availabilityTitle}" weight "{weightTitle}"')
     return Items
 
-def loadItems(filename, supplier, columns, replacement, include0PricedItems, translateSku, encodings, shippingCostFcn, verbose):
-    for enc in encodings:
+def loadItems(supplier_def, encodings, verbose):
+    for encoding in encodings:
         try:
-            itms = _loadItems(filename, supplier, columns, replacement, include0PricedItems, translateSku, enc, shippingCostFcn, verbose)
+            itms = _loadItems(supplier_def, encoding, verbose)
             if itms is not None:
                 return itms
         except:
             pass
-    verbose(f'DecodeError when reading file {filename} - skipping')
+    verbose(f'DecodeError when reading file {supplier_def.data} - skipping')
     return None
 
 def printItems(Items):
@@ -291,7 +332,7 @@ def selectItems(Items, verbose):
             if selName is not None:
                 Duplicates.append( (item,selItem) )
                 dupCnt += 1
-                if item.tot_cost < selItem.tot_cost and availabilityToRange(item.availability)[0]>0:# compareAvailability(item.availability, selItem.availability)>=0:
+                if item.tot_cost < selItem.tot_cost and item.availability[1]>0:# compareAvailability(item.availability, selItem.availability)>=0:
                     SelectedItems[name] = item   
             else:
                 SelectedItems[name]=item
@@ -313,16 +354,6 @@ def makeVerbose(Args):
         return toFile
     else:
         return dummy
-
-def readDataFiles(dir,Cfg):
-    FnToSupplier = {v.lower():k for k,v in Cfg['suppliers'].items()} if 'suppliers' in Cfg else {}
-    Files = {}
-    for fn in dir.iterdir():
-        if fn.is_file() and fn.suffix.lower() in ('.csv','.txt'):
-            name = fn.name.lower()
-            name = FnToSupplier[name] if name in FnToSupplier else fn.name
-            Files[name]=fn
-    return Files
 
 def writeResult(SelectedItems,outputFn):
     with open(outputFn,'w') as outf:
@@ -355,31 +386,18 @@ def writeNames(Items, allnamesFn):
 
 def main(Args):
     verbose = makeVerbose(Args)
-    Cfg = prepareInputs(Args,verbose)
-    Files = readDataFiles(Args.dir, Cfg)
+    Cfg,Suppliers = prepareInputs(Args,verbose)
 
-    columns = Cfg['columns']
     outputFn = Path(Cfg[fOutputFilename])
-    replacement = Cfg['replace']
     duplicatesFn = Cfg[fDuplicatesFilename]
     allnamesFn = Cfg[fAllNamesFilename]
-    zpi = Cfg["inlude_0_priced_items"]
-    ignoreSkuCase = Cfg["sku_ignore_case"]
     encodings = Cfg['encodings']
-
-    tt = str.maketrans( {c:None for c in Cfg['sku_chars_to_remove']} )
-    def translateSku(sku):
-        skut = sku.translate(tt)
-        if ignoreSkuCase:
-            skut = skut.lower()
-        return skut
-    
     Items = {}
-    for supplier,file_ in Files.items():
-        shippingCostFcn = Cfg['shipping'][supplier] if supplier in Cfg['shipping'] else None
-        itms = loadItems(file_, supplier, columns, replacement, zpi, translateSku, encodings, shippingCostFcn, verbose)
+
+    for supplier_name, supplier_def in Suppliers.items():
+        itms = loadItems(supplier_def, encodings, verbose)
         if itms is not None:
-            Items[supplier]=itms
+            Items[supplier_name]=itms
     
     SelectedItems,Duplicates = selectItems(Items, verbose)
     

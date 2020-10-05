@@ -16,20 +16,21 @@ config.json - describes various options, some can be overwritten via command lin
   -n filename will overwrite `all_skus_filename` from config  
   
 ## config file
-### columns section
-There are 3 mandatory sections: `sku`, `price` and `availability`.
-For each one, list of valid titles (one for each datafeed file) can be specified.  
-Additional columns, like `upc` can be specified the same way, these will be added to the output file
 
 ### replace section
 In this section, for each extracted column, like `availability` value replacement rules can be specified (optionally)  
 This shall address a problem with `availability` equal to `B` or `CALL` - it can be replaced with `0` or `>1`  
 
 ### suppliers section
-This section defines mapping of datafeed filename to supplier name. Supplier name is required for matchig appropriate shipping cost rules
+This section configures suppliers. Each supplier needs following data:
+#### columns 
+There are 3 mandatory sections: `sku`, `price` and `availability`.  
+For each one, list of valid titles (one for each datafeed file) can be specified.  
+Additional columns, like `upc` can be specified the same way, these will be added to the output file
+#### data
+defines mapping of datafeed filename to supplier name. Supplier name is required for matchig appropriate shipping cost rules
 to datafeed files
-
-### shipping_rules section
+#### shipping_rules
    Available rules:
       "NA" : cost    - cost to be applied when no weight is provided (weight column empty)  
       "x-ykg" : cost - cost to be applied when weight is between x and y kg  
