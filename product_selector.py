@@ -109,7 +109,15 @@ def prepareInputs(Args,verbose):
         supp.name = name
         supp.shipping = loadShippingCostRules(supp_def['shipping_rules'] if 'shipping_rules' in supp_def else None)
         supp.translateSku = makeTranslateSku(supp.sku_chars_to_remove, supp.sku_ignore_case)
-        supp.data = Args.dir / supp_def['data']
+        filename = supp_def['data']
+        if '*' in filename:
+            allFilenames = list(Args.dir.glob(filename))
+            if not allFilenames:continue
+            allFilenames = sorted(allFilenames, key=lambda x : x.stat().st_mtime, reverse=True)
+            supp.data = allFilenames[0]
+            verbose( f'wildcard in {filename} resolved to {supp.data}')
+        else:
+            supp.data = Args.dir / supp_def['data']
         supp.columns = supp_def['columns']
         Suppliers[name]=supp
     
@@ -405,6 +413,15 @@ def main(Args):
     writeDuplicates(Duplicates, duplicatesFn)
     writeNames(Items, allnamesFn)
 
+    if Args.search is not None:
+        sit = Args.search.lower()
+        for sn,vals in Items.items():
+            if sit in vals:
+                print( f'item {Args.search} in {sn}')
+        if sit in SelectedItems:
+            print( f'item {Args.search} in selected items')
+
+
 class TestShippingRules(unittest.TestCase):
     def test_1(self):
         calc_shc = loadShippingCostRules({'dummy':{
@@ -452,6 +469,7 @@ if __name__ == '__main__':
     parser.add_argument("-cfg",type=Path,help="config file path and name")
     parser.add_argument("-verbose","-v",action='store_true',help="print debug informations")
     parser.add_argument("-test","-t",action='store_true',help="run unit testing")
+    parser.add_argument("-search",type=str,help="search item in the final results")
     Args = parser.parse_args()
 
     if Args.test:

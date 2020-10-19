@@ -13,7 +13,7 @@
 
     "suppliers" : {
         "Leader" : {
-            "data" : "LNR4520200908151408.csv",
+            "data" : "LNR45*.csv",
             "columns": {
                 "sku": "MANUFACTURER SKU",
                 "price": "DBP",
