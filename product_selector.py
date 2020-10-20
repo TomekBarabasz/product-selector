@@ -111,13 +111,14 @@ def prepareInputs(Args,verbose):
         supp.translateSku = makeTranslateSku(supp.sku_chars_to_remove, supp.sku_ignore_case)
         filename = supp_def['data']
         if '*' in filename:
-            allFilenames = list(Args.dir.glob(filename))
-            if not allFilenames:continue
-            allFilenames = sorted(allFilenames, key=lambda x : x.stat().st_mtime, reverse=True)
-            supp.data = allFilenames[0]
-            verbose( f'wildcard in {filename} resolved to {supp.data}')
+            names = list(Args.dir.glob(filename))
+            if len(names)==0:
+                verbose( f'filename {filename} not found')
+                continue
+            supp.data = names[0]
+            verbose(f'wildcard in {filename} resolved to {supp.data}')
         else:
-            supp.data = Args.dir / supp_def['data']
+            supp.data = Args.dir / filename
         supp.columns = supp_def['columns']
         Suppliers[name]=supp
     
@@ -232,6 +233,7 @@ def _loadItems(supplier_def, encoding, verbose):
         sep=detectSeparator(line)
         invalidLines = 0
         invalidPrices = 0
+        invalidSku = 0
         csvfile.seek(0)
         reader = csv.reader(csvfile, delimiter=sep)
         for row in reader:
@@ -259,6 +261,9 @@ def _loadItems(supplier_def, encoding, verbose):
                         #print(f"{supplier_def.name} skipping item {sku} with avr {avr}")
                         continue
                     sku = getAt(row, skuIdx)
+                    if not sku:
+                        invalidSku += 1
+                        continue
                     price = covertToType(getAt(row, priceIdx, priceReplacement), float)
 
                     weight = covertToType(getAt(row, weightIdx, weightReplacement), float) if weightIdx is not None else 0
@@ -280,20 +285,24 @@ def _loadItems(supplier_def, encoding, verbose):
     verbose(f'file {supplier_def.data} separator "{sepn}" encoding {encoding}')
     verbose(f'\tloaded {len(Items)} items')
     verbose(f'\tskipped {invalidPrices} items without a price')
+    verbose(f'\tskipped {invalidSku} items with empty sku')
     verbose(f'\tskipped {invalidLines} invalid lines')
     verbose(f'\ttitle indices: skuIdx "{skuIdx}", priceIdx "{priceIdx}" availabilityIdx "{availabilityIdx}" weightIdx "{weightIdx}"')
     return Items
 
 def loadItems(supplier_def, encodings, verbose):
+    if not supplier_def.data.exists():
+        verbose( f'filename {supplier_def.data} not found')
+        return None,None
     for encoding in encodings:
         try:
             itms = _loadItems(supplier_def, encoding, verbose)
             if itms is not None:
-                return itms
+                return itms,encoding
         except:
             pass
     verbose(f'DecodeError when reading file {supplier_def.data} - skipping')
-    return None
+    return None,None
 
 def printItems(Items):
     for filename,items in Items.items():
@@ -363,8 +372,8 @@ def makeVerbose(Args):
     else:
         return dummy
 
-def writeResult(SelectedItems,outputFn):
-    with open(outputFn,'w') as outf:
+def writeResult(SelectedItems,outputFn, encoding=None):
+    with open(outputFn,'w',encoding=encoding) as outf:
         row = 'sku,supplier,price,price+shipping,availability'
         for i in SelectedItems.values():
             for n in i.optionalColumns.keys():
@@ -375,18 +384,18 @@ def writeResult(SelectedItems,outputFn):
             row = f'"{item.sku}",{item.supplier},{item.price},{item.tot_cost},{item.orig_availability}'
             for v in item.optionalColumns.values():
                 row += ',' + v
-            outf.write( row + '\n')
+            outf.write(row + '\n')
 
-def writeDuplicates(Duplicates, duplicatesFn):
+def writeDuplicates(Duplicates, duplicatesFn, encoding=None):
     if duplicatesFn is not None:
-        with open(duplicatesFn,'w') as outf:
+        with open(duplicatesFn,'w',encoding=encoding) as outf:
             outf.write('sku 1,supplier 1,sku 2,supplier 2,price 1,total cost 1,price 2,total cost 2,availability 1,availability 2\n')
             for i1,i2 in Duplicates:
                 outf.write( f'"{i1.sku}",{i1.supplier},"{i2.sku}",{i2.supplier},{i1.price},{i1.tot_cost},{i2.price},{i2.tot_cost},{i1.orig_availability},{i2.orig_availability}\n' )
 
-def writeNames(Items, allnamesFn):   
+def writeNames(Items, allnamesFn,encoding=None):   
     if allnamesFn is not None:
-        with open(allnamesFn,'w') as outf:
+        with open(allnamesFn,'w',encoding=encoding) as outf:
             outf.write('sku,supplier\n')
             for itms in Items.values():
                 for i in itms.values():
@@ -402,16 +411,24 @@ def main(Args):
     encodings = Cfg['encodings']
     Items = {}
 
+    output_encoding = None
     for supplier_name, supplier_def in Suppliers.items():
-        itms = loadItems(supplier_def, encodings, verbose)
+        itms,encoding = loadItems(supplier_def, encodings, verbose)
         if itms is not None:
             Items[supplier_name]=itms
+            if encoding is not None:
+                if output_encoding is None:
+                    output_encoding = encoding
+                else:
+                    verbose(f'colliding encodings : {output_encoding} and {encoding}, switching to utf-8')
+                    output_encoding = 'utf-8'
+            
     
     SelectedItems,Duplicates = selectItems(Items, verbose)
-    
-    writeResult(SelectedItems,outputFn)
-    writeDuplicates(Duplicates, duplicatesFn)
-    writeNames(Items, allnamesFn)
+    verbose(f'using {output_encoding} as output encoding')
+    writeResult(SelectedItems,outputFn, output_encoding)
+    writeDuplicates(Duplicates, duplicatesFn, output_encoding)
+    writeNames(Items, allnamesFn, output_encoding)
 
     if Args.search is not None:
         sit = Args.search.lower()
