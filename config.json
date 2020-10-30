@@ -64,7 +64,8 @@
     "encodings" : [null, "utf-8", "cp1252", "ISO-8859-1"],
     "sku_chars_to_remove" : " -_=/.",
     "sku_ignore_case" : true,
-    "inlude_0_priced_items" : false,
+    "include_0_priced_items" : false,
+    "include_out_of_stock_items" : true,
     "output_filename" : null,
     "duplicates_filename" : null,
     "all_skus_filename" : null

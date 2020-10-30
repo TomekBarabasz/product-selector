@@ -1,6 +1,7 @@
 import sys,argparse,json,re,csv,unittest,operator
 from pathlib import Path
 from collections import namedtuple
+from datetime import datetime
 
 fOutputFilename = 'output_filename'
 fDuplicatesFilename = 'duplicates_filename'
@@ -90,16 +91,18 @@ def prepareInputs(Args,verbose):
         Cfg[fDuplicatesFilename] = Args.duplicates 
     if Args.names is not None:
         Cfg[fAllNamesFilename] = Args.names
-    if "inlude_0_priced_items" not in Cfg or Cfg["inlude_0_priced_items"] is None:
-        Cfg["inlude_0_priced_items"] = False
+    if "include_0_priced_items" not in Cfg or Cfg["include_0_priced_items"] is None:
+        Cfg["include_0_priced_items"] = False
     if 'replace' not in Cfg or Cfg['replace'] is None:
         Cfg['replace'] = {}
     if "sku_ignore_case" not in Cfg or Cfg["sku_ignore_case"] is None:
         Cfg["sku_ignore_case"] = True
     if 'encodings' not in Cfg or Cfg['encodings'] is None:
         Cfg['encodings'] = (None, "utf-8", "cp1252", "ISO-8859-1")
-    
-    global_settings = ['inlude_0_priced_items', 'replace', 'sku_chars_to_remove','sku_ignore_case']
+    if 'include_out_of_stock_items' not in Cfg or Cfg['include_out_of_stock_items'] is None:
+        Cfg['include_out_of_stock_items'] = False
+
+    global_settings = ['include_0_priced_items', 'replace', 'sku_chars_to_remove','sku_ignore_case', 'include_out_of_stock_items']
     Suppliers = {}
     for name,supp_def in Cfg['suppliers'].items():
         supp = Supplier()
@@ -227,6 +230,7 @@ def _loadItems(supplier_def, encoding, verbose):
     columns = supplier_def.columns
     firstLine=True
     Items = {}
+    t0 = datetime.utcnow()
 
     with open(supplier_def.data, encoding=encoding) as csvfile:
         line = csvfile.readline()
@@ -234,6 +238,7 @@ def _loadItems(supplier_def, encoding, verbose):
         invalidLines = 0
         invalidPrices = 0
         invalidSku = 0
+        outOfStockItems = 0
         csvfile.seek(0)
         reader = csv.reader(csvfile, delimiter=sep)
         for row in reader:
@@ -257,8 +262,8 @@ def _loadItems(supplier_def, encoding, verbose):
                 try:
                     opt = { k:getAt(row, v) for k,v in optionalColumns.items() }
                     availability,avr = readAvailability(row, availabilityIdx, availreplacement)
-                    if avr[1] <=0 : 
-                        #print(f"{supplier_def.name} skipping item {sku} with avr {avr}")
+                    if avr[1] <=0 and not supplier_def.include_out_of_stock_items: 
+                        outOfStockItems += 1
                         continue
                     sku = getAt(row, skuIdx)
                     if not sku:
@@ -269,7 +274,7 @@ def _loadItems(supplier_def, encoding, verbose):
                     weight = covertToType(getAt(row, weightIdx, weightReplacement), float) if weightIdx is not None else 0
                     if price is None:
                         invalidPrices += 1
-                    elif price==0 and not supplier_def.inlude_0_priced_items:
+                    elif price==0 and not supplier_def.include_0_priced_items:
                         invalidPrices += 1
                     else:
                         skut = supplier_def.translateSku(sku)
@@ -283,9 +288,10 @@ def _loadItems(supplier_def, encoding, verbose):
     
     sepn = 'comma' if sep==',' else 'tab'
     verbose(f'file {supplier_def.data} separator "{sepn}" encoding {encoding}')
-    verbose(f'\tloaded {len(Items)} items')
+    verbose(f'\tloaded {len(Items)} items time {datetime.utcnow()-t0}')
     verbose(f'\tskipped {invalidPrices} items without a price')
     verbose(f'\tskipped {invalidSku} items with empty sku')
+    verbose(f'\tskipped {outOfStockItems} out of stock items')
     verbose(f'\tskipped {invalidLines} invalid lines')
     verbose(f'\ttitle indices: skuIdx "{skuIdx}", priceIdx "{priceIdx}" availabilityIdx "{availabilityIdx}" weightIdx "{weightIdx}"')
     return Items
@@ -299,9 +305,12 @@ def loadItems(supplier_def, encodings, verbose):
             itms = _loadItems(supplier_def, encoding, verbose)
             if itms is not None:
                 return itms,encoding
-        except:
+        except UnicodeDecodeError:
             pass
-    verbose(f'DecodeError when reading file {supplier_def.data} - skipping')
+        except Exception as e:     # most generic exception you can catch
+            verbose( f'Exception when loading {supplier_def.data} : {e}' )
+            pass
+    verbose(f'Error reading file {supplier_def.data} - skipping')
     return None,None
 
 def printItems(Items):
@@ -314,10 +323,10 @@ def printItems(Items):
             if cnt <=0: break
 
 def findMatching(Items, name):
-    for iname,item in Items.items():
-        if iname==name:
-            return iname,item
-    return None,None
+    try:
+        return name, Items[name]
+    except KeyError:
+        return None,None
 
 # note return -1 if a < b
 # 0 if a==0
@@ -344,6 +353,7 @@ def selectItems(Items, verbose):
     itemsCnt = 0
     for f,items in Items.items():
         dupCnt=0
+        t0 = datetime.utcnow()
         for name,item in items.items():
             selName,selItem = findMatching(SelectedItems, name)
             if selName is not None:
@@ -353,8 +363,9 @@ def selectItems(Items, verbose):
                     SelectedItems[name] = item   
             else:
                 SelectedItems[name]=item
+        dt = datetime.utcnow() - t0
         totItems = len(SelectedItems)
-        verbose(f'\tfile {f } : {dupCnt} duplicates, added {totItems-itemsCnt} items, total items {totItems}')
+        verbose(f'\tfile {f } : {dupCnt} duplicates, added {totItems-itemsCnt} items, total items {totItems} time {dt}')
         itemsCnt = totItems
     return SelectedItems, Duplicates
 
@@ -422,7 +433,6 @@ def main(Args):
                 else:
                     verbose(f'colliding encodings : {output_encoding} and {encoding}, switching to utf-8')
                     output_encoding = 'utf-8'
-            
     
     SelectedItems,Duplicates = selectItems(Items, verbose)
     verbose(f'using {output_encoding} as output encoding')
