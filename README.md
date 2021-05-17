@@ -55,4 +55,10 @@ to datafeed files
   * if true, 0 priced items will be loaded and possibly appended to the output if not replaced by better duplicates
   * if false, 0 priced items are skipped
   
- 
+# find_discontinued
+find discontinued products  
+command line: python find_discontinued.py datafeed_folder products_in_stock.csv -cfg config.json -o discontinued.csv
+
+shortcut : find_discontinued.bat - requires file products_in_stock.csv in the same folder
+will produce discontinued.csv file as output
+
