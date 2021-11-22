@@ -48,7 +48,7 @@
             "data" : "294280.TXT",
             "columns": {
                 "sku": "Vendor Part Number", 
-                "price": "Retail Price", 
+                "price": "Customer Price", 
                 "availability": "Available Quantity",
                 "weight"      : "weight",
                 "upc"         : "EANUPC Code"
