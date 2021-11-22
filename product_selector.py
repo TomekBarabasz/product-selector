@@ -140,12 +140,12 @@ def main(Args):
 
 class TestShippingRules(unittest.TestCase):
     def test_1(self):
-        calc_shc = loadShippingCostRules({'dummy':{
+        calc_shc = loadShippingCostRules({
                                         ">5kg"  : 25,
                                         "3-5kg" : 17.5,
                                         "0-3kg" : 12,
                                         "NA"    : 15,
-                                        "free"  : ">1000$" }})['dummy']
+                                        "free"  : ">1000$" })
         self.assertEqual(calc_shc(1,    None),  15) #NA weight
         self.assertEqual(calc_shc(1,    0),     12)
         self.assertEqual(calc_shc(1,    3),     12)
@@ -162,10 +162,10 @@ class TestShippingRules(unittest.TestCase):
         self.assertEqual(calc_shc(1000.1, 15),  0)
 
     def test_2(self):
-        calc_shc = loadShippingCostRules({'dummy':{
+        calc_shc = loadShippingCostRules({
                                         "per_product" : 15,
                                         "free" : ">300$",
-                                        "NA" : 10 }})['dummy']
+                                        "NA" : 10 })
         self.assertEqual(calc_shc(1,    None),  10) #NA weight
         self.assertEqual(calc_shc(1,    1),     15)
         self.assertEqual(calc_shc(1,    5),     15)
